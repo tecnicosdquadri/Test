@@ -1,0 +1,1053 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Calendario Commesse Collaborativo</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --main-bg: #f8fafc;
+            --sidebar-bg: #ffffff;
+            --header-bg: #ffffff;
+            --border-color: #e2e8f0;
+            --text-primary: #1e293b;
+            --text-secondary: #64748b;
+            --brand-color: #4f46e5;
+        }
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--main-bg);
+            color: var(--text-primary);
+        }
+        /* Definisce la struttura principale della griglia per il calendario.
+           La prima colonna è fissa per le etichette delle persone, e le seguenti 21 colonne
+           (per 21 giorni) sono flessibili con una larghezza minima. */
+        .calendar-grid {
+            display: grid;
+            grid-template-columns: 150px repeat(21, minmax(60px, 1fr));
+            overflow-x: auto; /* Consente lo scorrimento orizzontale se il contenuto supera la larghezza */
+        }
+        /* Stili per gli elementi di lavoro trascinabili, sia non programmati che programmati sul calendario. */
+        .job-item {
+            cursor: grab;
+            transition: all 0.2s ease-in-out;
+            position: relative;
+            overflow: hidden;
+            border-left: 5px solid; /* Per la codifica a colori */
+        }
+        .job-item:active {
+            cursor: grabbing;
+            opacity: 0.8;
+            transform: scale(1.05); /* Lieve ingrandimento quando si trascina attivamente */
+        }
+        /* Stili per le singole celle nella griglia del calendario. */
+        .calendar-cell {
+            border-right: 1px solid var(--border-color);
+            border-bottom: 1px solid var(--border-color);
+            min-height: 80px; /* Assicura un'altezza sufficiente per le commesse */
+            position: relative; /* Importante per il posizionamento delle commesse programmate all'interno delle celle */
+        }
+        /* Posizionamento "sticky" per le etichette delle persone per rimanere visibili durante lo scorrimento orizzontale. */
+        .person-label {
+            position: sticky;
+            left: 0;
+            background-color: var(--sidebar-bg);
+            z-index: 10;
+        }
+        /* Posizionamento "sticky" per le intestazioni di data per rimanere visibili durante lo scorrimento verticale e orizzontale. */
+        .date-header {
+            position: sticky;
+            top: 0;
+            background-color: var(--header-bg);
+            z-index: 20;
+        }
+        /* Stili per gli elementi di lavoro posizionati sulla griglia del calendario. */
+        .job-on-calendar {
+            position: absolute;
+            top: 4px;
+            left: 0;
+            z-index: 5;
+            height: calc(100% - 8px); /* Altezza completa meno il padding superiore/inferiore */
+            border-radius: 0.375rem;
+            display: flex;
+            align-items: center;
+            justify-content: flex-start; /* Allinea il testo a sinistra */
+            padding: 0 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            font-size: 0.8rem;
+            font-weight: 500;
+            color: white;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        /* Maniglia di ridimensionamento per gli elementi di lavoro programmati. */
+        .resize-handle {
+            position: absolute;
+            right: 0;
+            top: 0;
+            width: 10px;
+            height: 100%;
+            cursor: col-resize; /* Indica il ridimensionamento orizzontale */
+            z-index: 6; /* Assicura che sia sopra il contenuto dell'elemento di lavoro */
+        }
+        /* Barra di scorrimento personalizzata per una migliore estetica su tutti i browser. */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 10px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8;
+        }
+        /* Stili per il "backdrop" modale (oscura lo sfondo quando il modale è aperto). */
+        .modal-backdrop {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 50;
+        }
+        /* Stili aggiuntivi per il menu di contesto */
+        .context-menu {
+            position: absolute;
+            background-color: white;
+            border-radius: 0.375rem;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            z-index: 100;
+            min-width: 120px;
+            overflow: hidden;
+        }
+        .context-menu-item {
+            padding: 8px 12px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            color: var(--text-primary);
+        }
+        .context-menu-item:hover {
+            background-color: #f0f0f0;
+        }
+        .context-menu-item.delete:hover {
+            background-color: #fee2e2;
+            color: #dc2626;
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+
+    <div id="app" class="h-screen w-screen flex flex-col">
+        <!-- Sezione dell'intestazione -->
+        <header class="bg-white border-b border-gray-200 p-4 flex justify-between items-center shadow-sm">
+            <h1 class="text-xl font-bold text-gray-800">🗓️ Calendario Commesse</h1>
+            <div class="flex items-center space-x-4">
+                <div class="flex items-center space-x-2">
+                    <!-- Pulsante Settimana precedente -->
+                    <button id="prev-week" class="p-2 rounded-md bg-gray-100 hover:bg-gray-200 transition-colors" title="Settimana precedente">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
+                    </button>
+                    <!-- Pulsante Oggi -->
+                    <button id="today-btn" class="px-3 py-2 text-sm font-semibold bg-gray-100 hover:bg-gray-200 rounded-md transition-colors">Oggi</button>
+                    <!-- Pulsante Settimana successiva -->
+                    <button id="next-week" class="p-2 rounded-md bg-gray-100 hover:bg-gray-200 transition-colors" title="Settimana successiva">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                    </button>
+                </div>
+                <!-- Visualizzazione dell'intervallo di date corrente -->
+                <span id="current-range" class="text-sm font-medium text-gray-600 w-40 text-center"></span>
+                <!-- Pulsante per mostrare il modale Aggiungi Tipo Commessa -->
+                <button id="show-add-job-modal" class="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 font-semibold text-sm shadow-sm">
+                    + Aggiungi Tipo Commessa
+                </button>
+                <!-- NUOVA FUNZIONALITÀ: Pulsante Gestisci Operatori -->
+                <button id="show-manage-people-modal" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 font-semibold text-sm shadow-sm">
+                    Gestisci Operatori
+                </button>
+            </div>
+        </header>
+
+        <!-- Area del contenuto principale: Calendario e Sidebar -->
+        <div class="flex-1 flex overflow-hidden">
+            <!-- Sezione Visualizzazione Calendario -->
+            <main class="flex-1 flex flex-col overflow-auto">
+                <div id="calendar-container" class="flex-1 relative">
+                    <!-- La griglia del calendario verrà popolata dinamicamente da JavaScript -->
+                </div>
+            </main>
+
+            <!-- Sidebar con Tipi di Commesse Non Programmate -->
+            <aside class="w-80 bg-white border-l border-gray-200 p-4 flex flex-col shadow-lg">
+                <h2 class="text-lg font-semibold mb-4 text-gray-700">Tipi di Commesse</h2>
+                <div id="unscheduled-jobs" class="flex-1 overflow-y-auto space-y-3 pr-2">
+                    <!-- Qui verranno elencati i modelli di lavoro non programmati -->
+                </div>
+            </aside>
+        </div>
+    </div>
+
+    <!-- Modale Aggiungi Nuovo Tipo di Commessa -->
+    <div id="add-job-modal" class="modal-backdrop hidden">
+        <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-md">
+            <h3 class="text-lg font-medium mb-4">Nuovo Tipo di Commessa</h3>
+            <form id="add-job-form">
+                <div class="space-y-4">
+                    <input type="text" id="job-name" placeholder="Nome Commessa (es. Progetto Alpha)" class="w-full p-2 border rounded-md" required>
+                    <input type="number" id="job-duration" placeholder="Durata in giorni" class="w-full p-2 border rounded-md" min="1" required>
+                    <input type="color" id="job-color" value="#4f46e5" class="w-full p-1 h-10 border rounded-md">
+                </div>
+                <div class="flex justify-end space-x-3 mt-6">
+                    <button type="button" id="cancel-add-job" class="px-4 py-2 bg-gray-200 rounded-md text-sm font-medium">Annulla</button>
+                    <button type="submit" class="px-4 py-2 bg-indigo-600 text-white rounded-md text-sm font-medium">Salva</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modale di conferma divisione -->
+    <div id="split-confirm-modal" class="modal-backdrop hidden">
+        <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-md text-center">
+            <h3 class="text-lg font-medium mb-2">Dividere Commessa?</h3>
+            <p id="split-message" class="text-gray-600 mb-6"></p>
+            <div class="flex justify-center space-x-4">
+                <button id="cancel-split" class="px-6 py-2 bg-gray-200 rounded-md font-medium">Annulla</button>
+                <button id="confirm-split" class="px-6 py-2 bg-red-600 text-white rounded-md font-medium">Conferma</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- NUOVA FUNZIONALITÀ: Modale Modifica Commessa Programmata -->
+    <div id="edit-scheduled-job-modal" class="modal-backdrop hidden">
+        <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-md">
+            <h3 class="text-lg font-medium mb-4">Modifica Commessa Programmata</h3>
+            <form id="edit-scheduled-job-form">
+                <div class="space-y-4">
+                    <input type="hidden" id="edit-job-id">
+                    <input type="text" id="edit-job-name" placeholder="Nome Commessa" class="w-full p-2 border rounded-md" required>
+                    <input type="number" id="edit-job-duration" placeholder="Durata in giorni" class="w-full p-2 border rounded-md" min="1" required>
+                    <input type="color" id="edit-job-color" class="w-full p-1 h-10 border rounded-md">
+                    <!-- Dropdown per cambiare la persona assegnata -->
+                    <select id="edit-job-person" class="w-full p-2 border rounded-md"></select>
+                    <!-- Input per la data di inizio -->
+                    <input type="date" id="edit-job-start-date" class="w-full p-2 border rounded-md" required>
+                </div>
+                <div class="flex justify-end space-x-3 mt-6">
+                    <button type="button" id="cancel-edit-scheduled-job" class="px-4 py-2 bg-gray-200 rounded-md text-sm font-medium">Annulla</button>
+                    <button type="button" id="delete-scheduled-job" class="px-4 py-2 bg-red-600 text-white rounded-md text-sm font-medium">Elimina</button>
+                    <button type="submit" class="px-4 py-2 bg-indigo-600 text-white rounded-md text-sm font-medium">Salva Modifiche</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- NUOVA FUNZIONALITÀ: Modale Gestisci Operatori -->
+    <div id="manage-people-modal" class="modal-backdrop hidden">
+        <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-md">
+            <h3 class="text-lg font-medium mb-4">Gestisci Operatori</h3>
+            <div class="space-y-4 mb-6">
+                <div class="flex space-x-2">
+                    <input type="text" id="new-person-name" placeholder="Nome Nuovo Operatore" class="flex-1 p-2 border rounded-md">
+                    <button id="add-person-btn" class="px-4 py-2 bg-green-600 text-white rounded-md text-sm font-medium">Aggiungi</button>
+                </div>
+                <div id="people-list" class="border rounded-md max-h-60 overflow-y-auto">
+                    <!-- La lista degli operatori verrà renderizzata qui -->
+                </div>
+            </div>
+            <div class="flex justify-end">
+                <button type="button" id="close-manage-people-modal" class="px-4 py-2 bg-gray-200 rounded-md text-sm font-medium">Chiudi</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Visualizzazione ID Utente (per l'identificazione collaborativa) -->
+    <div id="user-info" class="fixed bottom-2 left-2 bg-gray-800 text-white text-xs p-2 rounded-lg shadow-lg">
+        ID Utente: <span id="user-id-display">...</span>
+    </div>
+
+    <script type="module">
+        // Importa i moduli Firebase per l'inizializzazione dell'app, l'autenticazione e le operazioni sul database Firestore.
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, doc, addDoc, onSnapshot, writeBatch, updateDoc, setDoc, deleteDoc, query, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- Configurazione Firebase ---
+        // Recupera la configurazione Firebase dall'ambiente Canvas, o usa i valori predefiniti per lo sviluppo.
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : { apiKey: "DEMO", authDomain: "DEMO", projectId: "DEMO" };
+        // Recupera l'ID dell'applicazione dall'ambiente Canvas, o usa un valore predefinito.
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-calendar-app-advanced';
+        
+        // Inizializza l'app Firebase, l'autenticazione e Firestore.
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        // Riferimenti alle collezioni Firestore:
+        // `jobsCollection` memorizza i modelli di commessa (tipi di commesse). Questi dati sono pubblici.
+        const jobsCollection = collection(db, `artifacts/${appId}/public/data/jobs`);
+        // `scheduleCollection` memorizza le istanze di commesse programmate sul calendario. Questi dati sono pubblici.
+        const scheduleCollection = collection(db, `artifacts/${appId}/public/data/schedule`);
+        // NUOVA FUNZIONALITÀ: `peopleCollection` memorizza l'elenco degli operatori. Questi dati sono pubblici.
+        const peopleCollection = collection(db, `artifacts/${appId}/public/data/people`);
+
+        // --- Variabili di stato dell'applicazione ---
+        let currentUser = null; // Memorizza l'utente autenticato corrente.
+        let currentDate = new Date(); // Rappresenta la data di inizio per la visualizzazione del calendario.
+        currentDate.setHours(0, 0, 0, 0); // Normalizza all'inizio del giorno.
+        // L'elenco delle persone verrà ora caricato da Firestore
+        let people = []; // Array per memorizzare l'elenco degli operatori.
+        let draggedElementData = null; // Memorizza i dati della commessa che viene trascinata.
+        let schedule = {}; // Oggetto per memorizzare le commesse programmate, indicizzate per persona-data per una ricerca rapida.
+        let selectedJobForEdit = null; // Memorizza la commessa selezionata per la modifica.
+
+        // --- Riferimenti agli elementi DOM ---
+        const calendarContainer = document.getElementById('calendar-container');
+        const unscheduledJobsContainer = document.getElementById('unscheduled-jobs');
+        const prevWeekBtn = document.getElementById('prev-week');
+        const nextWeekBtn = document.getElementById('next-week');
+        const todayBtn = document.getElementById('today-btn');
+        const currentRangeEl = document.getElementById('current-range');
+
+        // NUOVA FUNZIONALITÀ: Riferimenti DOM per la modifica/eliminazione della commessa programmata
+        const editScheduledJobModal = document.getElementById('edit-scheduled-job-modal');
+        const editScheduledJobForm = document.getElementById('edit-scheduled-job-form');
+        const editJobIdInput = document.getElementById('edit-job-id');
+        const editJobNameInput = document.getElementById('edit-job-name');
+        const editJobDurationInput = document.getElementById('edit-job-duration');
+        const editJobColorInput = document.getElementById('edit-job-color');
+        const editJobPersonSelect = document.getElementById('edit-job-person');
+        const editJobStartDateInput = document.getElementById('edit-job-start-date');
+        const cancelEditScheduledJobBtn = document.getElementById('cancel-edit-scheduled-job');
+        const deleteScheduledJobBtn = document.getElementById('delete-scheduled-job');
+
+        // NUOVA FUNZIONALITÀ: Riferimenti DOM per la gestione degli operatori
+        const showManagePeopleModalBtn = document.getElementById('show-manage-people-modal');
+        const managePeopleModal = document.getElementById('manage-people-modal');
+        const closeManagePeopleModalBtn = document.getElementById('close-manage-people-modal');
+        const newPersonNameInput = document.getElementById('new-person-name');
+        const addPersonBtn = document.getElementById('add-person-btn');
+        const peopleListContainer = document.getElementById('people-list');
+
+
+        // --- Funzioni di utilità ---
+        /**
+         * Formatta un oggetto Date in una stringa ISO (YYYY-MM-DD).
+         * @param {Date} date - L'oggetto data da formattare.
+         * @returns {string} La stringa di data formattata.
+         */
+        const formatDate = (date) => date.toISOString().split('T')[0];
+        
+        /**
+         * Aggiunge un numero specificato di giorni a una data data.
+         * @param {Date} date - La data di inizio.
+         * @param {number} days - Il numero di giorni da aggiungere (può essere negativo).
+         * @returns {Date} Un nuovo oggetto Date con i giorni aggiunti.
+         */
+        const addDays = (date, days) => {
+            const result = new Date(date);
+            result.setDate(result.getDate() + days);
+            return result;
+        };
+
+        // --- Rendering del calendario ---
+        /**
+         * Esegue il rendering della griglia principale del calendario, incluse le intestazioni di data e le righe delle persone.
+         * Calcola un intervallo di 21 giorni a partire da `currentDate`.
+         * Dopo il rendering della griglia, chiama `renderScheduledJobs` per popolarla con gli eventi.
+         */
+        function renderCalendar() {
+            const startDate = new Date(currentDate);
+            const endDate = addDays(startDate, 20); // 21 giorni da startDate (da 0 a 20)
+            
+            // Formatta e visualizza l'intervallo di date corrente nell'intestazione.
+            const options = { month: 'short', day: 'numeric' };
+            currentRangeEl.textContent = `${startDate.toLocaleDateString('it-IT', options)} - ${endDate.toLocaleDateString('it-IT', options)}`;
+
+            let html = '<div class="calendar-grid">';
+            
+            // Cella vuota in alto a sinistra per l'allineamento.
+            html += '<div class="date-header person-label border-r border-b border-gray-200"></div>';
+            // Esegue il rendering delle intestazioni di data per ciascuno dei 21 giorni.
+            for (let i = 0; i < 21; i++) {
+                const day = addDays(startDate, i);
+                // Evidenzia i fine settimana con uno sfondo diverso.
+                const dayClass = day.getDay() === 0 || day.getDay() === 6 ? 'bg-gray-100' : 'bg-white';
+                html += `<div class="date-header p-2 text-center text-xs font-semibold ${dayClass} border-r border-b border-gray-200">
+                    <div>${day.toLocaleDateString('it-IT', { weekday: 'short' })}</div>
+                    <div class="text-lg">${day.getDate()}</div>
+                </div>`;
+            }
+
+            // Esegue il rendering delle righe per ogni persona.
+            people.forEach(person => {
+                // Cella dell'etichetta della persona (appiccicosa a sinistra).
+                html += `<div class="person-label p-2 border-r border-b border-gray-200 flex items-center justify-start font-semibold text-sm text-gray-600">${person.name}</div>`;
+                // Celle del calendario per ogni giorno per la persona corrente.
+                for (let i = 0; i < 21; i++) {
+                    const cellDate = addDays(startDate, i);
+                    const dayClass = cellDate.getDay() === 0 || cellDate.getDay() === 6 ? 'bg-gray-50' : 'bg-white';
+                    // `data-date` e `data-person` sono cruciali per il targeting del drag-and-drop.
+                    html += `<div class="calendar-cell ${dayClass}" data-date="${formatDate(cellDate)}" data-person="${person.name}"></div>`;
+                }
+            });
+
+            html += '</div>';
+            calendarContainer.innerHTML = html;
+            renderScheduledJobs(); // Popola la griglia con le commesse programmate esistenti.
+            addDragAndDropListenersToCells(); // Collega i listener di drag-and-drop alle celle appena renderizzate.
+        }
+
+        /**
+         * Esegue il rendering delle commesse programmate sulla griglia del calendario.
+         * Per prima cosa rimuove tutti gli elementi di commessa esistenti per prevenire duplicati,
+         * quindi itera attraverso l'oggetto `schedule` per creare e posizionare nuovi elementi di commessa.
+         */
+        function renderScheduledJobs() {
+            // Rimuovi tutti gli elementi di lavoro precedentemente renderizzati per renderizzare di nuovo.
+            document.querySelectorAll('.job-on-calendar').forEach(el => el.remove());
+            
+            // Ottieni oggetti di lavoro programmati unici. L'oggetto `schedule` potrebbe contenere più voci
+            // per una singola commessa se si estende su più giorni, quindi estraiamo le commesse uniche.
+            const uniqueJobs = [...new Map(Object.values(schedule).map(item => [item.id, item])).values()];
+
+            uniqueJobs.forEach(job => {
+                // Assicurati che la commessa abbia i dati di programmazione richiesti.
+                if (!job.person || !job.startDate) return;
+
+                // Trova la cella specifica del calendario in cui questa commessa dovrebbe iniziare.
+                const startCell = document.querySelector(`.calendar-cell[data-person='${job.person}'][data-date='${job.startDate}']`);
+                
+                if (startCell) {
+                    const jobDiv = document.createElement('div');
+                    jobDiv.className = 'job-on-calendar job-item';
+                    jobDiv.draggable = true; // Rendi la commessa programmata trascinabile.
+                    jobDiv.innerHTML = `<span>${job.name}</span>`;
+                    jobDiv.style.backgroundColor = job.color;
+                    jobDiv.style.borderLeftColor = job.color;
+
+                    // Calcola la larghezza in base alla durata e alla larghezza della cella.
+                    // `calc(${job.duration * 100}% + ${job.duration - 1}px)` tiene conto in modo intelligente dei bordi delle celle da 1px
+                    // per far sì che la commessa si estenda correttamente su più celle visivamente.
+                    jobDiv.style.width = `calc(${job.duration * 100}% + ${job.duration - 1}px)`;
+                    
+                    // Memorizza gli attributi dei dati della commessa per il drag-and-drop e il ridimensionamento.
+                    jobDiv.dataset.id = job.id;
+                    jobDiv.dataset.type = 'scheduled'; // Differenzia dai modelli di commessa non programmati.
+                    jobDiv.dataset.name = job.name;
+                    jobDiv.dataset.duration = job.duration;
+                    jobDiv.dataset.color = job.color;
+                    jobDiv.dataset.person = job.person; // Aggiungi la persona al dataset per un facile recupero.
+                    jobDiv.dataset.startDate = job.startDate; // Aggiungi la data di inizio al dataset.
+
+                    // Aggiungi il listener di avvio trascinamento.
+                    jobDiv.addEventListener('dragstart', handleDragStart);
+                    // Aggiungi il listener di fine trascinamento per resettare l'opacità.
+                    jobDiv.addEventListener('dragend', handleDragEnd);
+                    // NUOVA FUNZIONALITÀ: Aggiungi il listener di clic per aprire il modale di modifica.
+                    jobDiv.addEventListener('click', (e) => {
+                        e.stopPropagation(); // Impedisce che il clic sulla cella si attivi.
+                        showJobEditModal(job);
+                    });
+                    
+                    // Aggiungi la maniglia di ridimensionamento per le commesse programmate.
+                    const resizeHandle = document.createElement('div');
+                    resizeHandle.className = 'resize-handle';
+                    // Collega il listener di mousedown per avviare il ridimensionamento.
+                    resizeHandle.addEventListener('mousedown', (e) => initResize(e, job, jobDiv));
+                    jobDiv.appendChild(resizeHandle);
+                    
+                    startCell.appendChild(jobDiv); // Aggiungi l'elemento di lavoro alla sua cella di partenza.
+                }
+            });
+        }
+        
+        /**
+         * Esegue il rendering dell'elenco dei modelli di commessa non programmati nella sidebar.
+         * Questi sono trascinabili sul calendario.
+         * @param {Array<Object>} jobs - Un array di oggetti modello di commessa da Firestore.
+         */
+        function renderUnscheduledJobs(jobs) {
+            unscheduledJobsContainer.innerHTML = ''; // Cancella l'elenco precedente.
+            jobs.forEach(job => {
+                const div = document.createElement('div');
+                div.className = 'job-item bg-white p-3 rounded-lg shadow-sm border-l-4';
+                div.style.borderColor = job.color;
+                div.draggable = true; // Rendi questi modelli trascinabili.
+                
+                // Memorizza i dati della commessa come attributi di dati per il drag-and-drop.
+                div.dataset.id = job.id; // Questo è l'ID del modello di commessa.
+                div.dataset.name = job.name;
+                div.dataset.duration = job.duration;
+                div.dataset.color = job.color;
+                div.dataset.type = 'unscheduled'; // Differenzia dalle commesse programmate.
+
+                div.innerHTML = `
+                    <p class="font-semibold text-sm">${job.name}</p>
+                    <p class="text-xs text-gray-500">Durata: ${job.duration} giorni</p>
+                `;
+                div.addEventListener('dragstart', handleDragStart); // Collega il listener di avvio trascinamento.
+                div.addEventListener('dragend', handleDragEnd); // Aggiungi il listener di fine trascinamento per resettare l'opacità.
+                unscheduledJobsContainer.appendChild(div);
+            });
+        }
+
+        /**
+         * Gestisce l'evento `dragstart` per gli elementi di commessa sia non programmati che programmati.
+         * Memorizza i dati dell'elemento trascinato e applica un feedback visivo (opacità).
+         * @param {DragEvent} e - L'evento di trascinamento.
+         */
+        function handleDragStart(e) {
+            // Impedisce il trascinamento dell'elemento di commessa se la maniglia di ridimensionamento è in uso.
+            if (e.target.classList.contains('resize-handle')) {
+                e.preventDefault();
+                return;
+            }
+            e.target.style.opacity = '0.5'; // Feedback visivo durante il trascinamento.
+            e.dataTransfer.effectAllowed = 'move'; // Specifica l'effetto di trascinamento consentito.
+            // Memorizza tutti i dati rilevanti dell'elemento trascinato.
+            draggedElementData = {
+                id: e.target.dataset.id,
+                type: e.target.dataset.type,
+                name: e.target.dataset.name,
+                duration: parseInt(e.target.dataset.duration),
+                color: e.target.dataset.color
+            };
+        }
+
+        /**
+         * Gestisce l'evento `dragend`. Resetta l'opacità dell'elemento trascinato.
+         * @param {DragEvent} e - L'evento di trascinamento.
+         */
+        function handleDragEnd(e) {
+            // Assicurati che l'elemento trascinato esista prima di tentare di accedere alla sua proprietà style
+            if (e.target) {
+                e.target.style.opacity = '1'; // Resetta l'opacità.
+            }
+            draggedElementData = null; // Cancella i dati trascinati.
+        }
+
+        /**
+         * Gestisce l'evento `drop` quando una commessa viene rilasciata su una cella del calendario.
+         * Determina se si tratta di una nuova programmazione o di uno spostamento di una commessa esistente,
+         * controlla le collisioni e attiva la conferma di divisione se necessario.
+         * @param {DragEvent} e - L'evento di rilascio.
+         */
+        async function handleDrop(e) {
+            e.preventDefault();
+            // Trova l'antenato della cella del calendario più vicino.
+            const cell = e.target.closest('.calendar-cell');
+            if (!cell) return; // Se non rilasciato su una cella, non fare nulla.
+            cell.style.backgroundColor = ''; // Resetta lo sfondo della cella da dragover.
+
+            if (!draggedElementData) return; // Se non ci sono dati, nulla da rilasciare.
+            
+            const targetDate = cell.dataset.date; // Data della cella di destinazione.
+            const targetPerson = cell.dataset.person; // Persona della cella di destinazione.
+
+            let collisionJob = null;
+            // Controlla le collisioni con le commesse programmate esistenti per l'intera durata della commessa rilasciata.
+            for (let i = 0; i < draggedElementData.duration; i++) {
+                const checkDate = formatDate(addDays(new Date(targetDate), i));
+                const key = `${targetPerson}-${checkDate}`;
+                // Se esiste già una commessa in questo slot temporale e non è la commessa stessa che viene spostata.
+                if (schedule[key] && schedule[key].id !== draggedElementData.id) {
+                    collisionJob = schedule[key];
+                    break;
+                }
+            }
+
+            if (collisionJob) {
+                // Se si verifica una collisione e l'elemento trascinato è un modello non programmato, chiedi la divisione.
+                if (draggedElementData.type === 'unscheduled') {
+                    showSplitConfirmModal(collisionJob, draggedElementData, targetDate);
+                } else {
+                    // Se è una commessa programmata che viene spostata e si verifica una collisione, impedisci lo spostamento.
+                    console.error("Collisione rilevata. Non è possibile spostare la commessa qui.");
+                    // Opzionalmente, fornisci un feedback visivo all'utente che il rilascio non è valido.
+                }
+            } else {
+                // Nessuna collisione, procedi con la programmazione o lo spostamento della commessa.
+                if (draggedElementData.type === 'unscheduled') {
+                    // Se un modello di commessa non programmato viene rilasciato, crea una nuova istanza programmata.
+                    const newEvent = {
+                        name: draggedElementData.name,
+                        duration: draggedElementData.duration,
+                        color: draggedElementData.color,
+                        person: targetPerson,
+                        startDate: targetDate,
+                        originalJobId: draggedElementData.id // Mantieni un riferimento all'ID del modello originale.
+                    };
+                    await addDoc(scheduleCollection, newEvent); // Aggiungi a Firestore.
+                } else { // Spostamento di una commessa programmata esistente.
+                    const eventRef = doc(scheduleCollection, draggedElementData.id);
+                    await updateDoc(eventRef, { person: targetPerson, startDate: targetDate }); // Aggiorna in Firestore.
+                }
+            }
+            draggedElementData = null; // Cancella i dati trascinati dopo il rilascio.
+        }
+
+        // --- Logica di ridimensionamento ---
+        let resizeInfo = {}; // Oggetto per memorizzare le informazioni sull'operazione di ridimensionamento corrente.
+        
+        /**
+         * Avvia un'operazione di ridimensionamento della commessa quando la maniglia di ridimensionamento viene premuta.
+         * @param {MouseEvent} e - L'evento mousedown.
+         * @param {Object} job - L'oggetto commessa che viene ridimensionato (dai dati di Firestore).
+         * @param {HTMLElement} jobDiv - L'elemento DOM che rappresenta la commessa sul calendario.
+         */
+        function initResize(e, job, jobDiv) {
+            e.preventDefault(); // Impedisce il comportamento predefinito di trascinamento del browser.
+            e.stopPropagation(); // Ferma la propagazione dell'evento per evitare di attivare il trascinamento della commessa.
+
+            const cellWidth = jobDiv.parentElement.offsetWidth; // Ottieni la larghezza di una singola cella del calendario.
+            resizeInfo = {
+                job, // Riferimento ai dati della commessa.
+                jobDiv, // Riferimento all'elemento DOM della commessa.
+                startX: e.clientX, // Coordinata X di partenza del mouse.
+                startDuration: job.duration, // Durata originale della commessa.
+                cellWidth // Larghezza di una singola cella per il calcolo delle modifiche di durata.
+            };
+
+            // Aggiungi listener globali di mousemove e mouseup per gestire il ridimensionamento su tutto il documento.
+            document.addEventListener('mousemove', doResize);
+            document.addEventListener('mouseup', stopResize);
+        }
+
+        /**
+         * Esegue il ridimensionamento visivo dell'elemento della commessa mentre il mouse si muove.
+         * @param {MouseEvent} e - L'evento mousemove.
+         */
+        function doResize(e) {
+            if (!resizeInfo.jobDiv) return; // Assicurati che l'operazione di ridimensionamento sia attiva.
+            
+            const deltaX = e.clientX - resizeInfo.startX; // Movimento orizzontale del mouse.
+            // Calcola la variazione in giorni in base al movimento del mouse rispetto alla larghezza della cella.
+            const deltaDays = Math.round(deltaX / resizeInfo.cellWidth);
+            let newDuration = resizeInfo.startDuration + deltaDays;
+            
+            if (newDuration < 1) newDuration = 1; // Assicurati che la durata sia almeno 1 giorno.
+
+            // Aggiorna visivamente la larghezza dell'elemento di lavoro.
+            // Questo calcolo assicura che la larghezza si adatti correttamente per agganciarsi ai bordi della cella.
+            resizeInfo.jobDiv.style.width = `calc(${newDuration * 100}% + ${newDuration - 1}px)`;
+            resizeInfo.currentDuration = newDuration; // Memorizza la durata corrente calcolata.
+        }
+
+        /**
+         * Ferma l'operazione di ridimensionamento e aggiorna la durata della commessa in Firestore.
+         * Se la commessa è stata accorciata, viene creata una nuova commessa "residua" non programmata.
+         */
+        async function stopResize() {
+            if (!resizeInfo.job) return; // Assicurati che l'operazione di ridimensionamento fosse attiva.
+            
+            const finalDuration = resizeInfo.currentDuration; // La durata dopo il ridimensionamento.
+            const originalDuration = resizeInfo.job.duration; // La durata della commessa prima del ridimensionamento.
+
+            // Rimuovi i listener globali di mousemove e mouseup.
+            document.removeEventListener('mousemove', doResize);
+            document.removeEventListener('mouseup', stopResize);
+            
+            // Aggiorna solo se la durata è effettivamente cambiata.
+            if (finalDuration && finalDuration !== originalDuration) {
+                const jobRef = doc(scheduleCollection, resizeInfo.job.id);
+                await updateDoc(jobRef, { duration: finalDuration }); // Aggiorna la durata della commessa in Firestore.
+                
+                // Se la commessa è stata accorciata, crea una nuova commessa non programmata che rappresenta la parte rimanente.
+                if (finalDuration < originalDuration) {
+                    const remnantDuration = originalDuration - finalDuration;
+                    await addDoc(jobsCollection, {
+                        name: resizeInfo.job.name, // Stesso nome della commessa originale.
+                        color: resizeInfo.job.color, // Stesso colore.
+                        duration: remnantDuration // La durata della parte tagliata.
+                    });
+                }
+            }
+
+            resizeInfo = {}; // Cancella le informazioni di ridimensionamento.
+        }
+
+        /**
+         * Mostra il modale di conferma divisione, chiedendo all'utente se vuole dividere una commessa esistente.
+         * @param {Object} existingJob - La commessa che attualmente occupa le celle di destinazione.
+         * @param {Object} newJob - La commessa che viene rilasciata (il modello non programmato).
+         * @param {string} splitDate - La stringa della data in cui viene rilasciata la nuova commessa.
+         */
+        function showSplitConfirmModal(existingJob, newJob, splitDate) {
+            const modal = document.getElementById('split-confirm-modal');
+            modal.classList.remove('hidden'); // Mostra il modale.
+            document.getElementById('split-message').innerHTML = `Vuoi dividere <strong>"${existingJob.name}"</strong> per inserire <strong>"${newJob.name}"</strong> a partire dal ${new Date(splitDate).toLocaleDateString('it-IT')}?`;
+            
+            const confirmBtn = document.getElementById('confirm-split');
+            // Definisci l'azione da intraprendere quando confermato.
+            const onConfirm = async () => {
+                await performSplit(existingJob, newJob, splitDate);
+                modal.classList.add('hidden'); // Nascondi il modale dopo l'azione.
+                confirmBtn.removeEventListener('click', onConfirm); // Rimuovi il listener per prevenire attivazioni multiple.
+            };
+            confirmBtn.addEventListener('click', onConfirm, { once: true }); // Usa { once: true } per la rimozione automatica dopo il primo clic.
+        }
+
+        /**
+         * Esegue l'operazione di divisione della commessa in Firestore.
+         * Aggiorna la commessa esistente, crea una nuova commessa dal modello rilasciato,
+         * e crea una "seconda parte" della commessa originale se si estende oltre la nuova commessa.
+         * Utilizza una scrittura batch di Firestore per aggiornamenti atomici.
+         * @param {Object} existingJob - La commessa che deve essere divisa.
+         * @param {Object} newJob - Il modello di commessa che viene inserito.
+         * @param {string} splitDateStr - La stringa della data in cui inizia la nuova commessa.
+         */
+        async function performSplit(existingJob, newJob, splitDateStr) {
+            const batch = writeBatch(db); // Inizializza un batch di Firestore per operazioni atomiche.
+            const splitDate = new Date(splitDateStr);
+            const existingJobStartDate = new Date(existingJob.startDate);
+
+            // Calcola la durata della prima parte della commessa esistente.
+            const firstPartDuration = Math.round((splitDate - existingJobStartDate) / (1000 * 60 * 60 * 24));
+            
+            if (firstPartDuration > 0) {
+                // Se la prima parte ha una durata positiva, aggiorna la durata della commessa esistente.
+                batch.update(doc(scheduleCollection, existingJob.id), { duration: firstPartDuration });
+            } else {
+                // Se la nuova commessa inizia alla data di inizio della commessa esistente o prima, elimina la commessa esistente.
+                // Questo implica che la nuova commessa sostituisce completamente l'inizio della vecchia.
+                batch.delete(doc(scheduleCollection, existingJob.id));
+            }
+            
+            // Aggiungi la nuova commessa (dal modello trascinato) alla programmazione.
+            batch.set(doc(scheduleCollection), {
+                name: newJob.name,
+                duration: newJob.duration,
+                color: newJob.color,
+                person: existingJob.person, // Usa la persona della commessa esistente.
+                startDate: formatDate(new Date(splitDateStr)), // La nuova commessa inizia alla data di rilascio.
+                originalJobId: newJob.id, // Riferimento al modello di commessa originale.
+            });
+
+            // Calcola la data di inizio e la durata per la seconda parte della commessa esistente.
+            const secondPartStartDate = addDays(new Date(splitDateStr), newJob.duration);
+            const secondPartDuration = existingJob.duration - firstPartDuration - newJob.duration;
+
+            if (secondPartDuration > 0) {
+                // Se rimane una parte della commessa originale, crea una nuova istanza programmata per essa.
+                batch.set(doc(scheduleCollection), {
+                    // Distribuisci le proprietà della commessa esistente, quindi sovrascrivi quelle pertinenti.
+                    ...existingJob,
+                    id: undefined, // Firestore genererà un nuovo ID per questo nuovo documento.
+                    startDate: formatDate(secondPartStartDate), // Inizia dopo la fine della nuova commessa.
+                    duration: secondPartDuration,
+                });
+            }
+            await batch.commit(); // Esegui tutte le operazioni batch in modo atomico.
+        }
+
+        // --- NUOVA FUNZIONALITÀ: Funzioni per la gestione delle commesse programmate ---
+        /**
+         * Mostra il modale per la modifica di una commessa programmata, popolando i campi con i dati della commessa.
+         * @param {Object} job - L'oggetto della commessa programmata da modificare.
+         */
+        function showJobEditModal(job) {
+            selectedJobForEdit = job; // Memorizza la commessa selezionata.
+            editJobIdInput.value = job.id;
+            editJobNameInput.value = job.name;
+            editJobDurationInput.value = job.duration;
+            editJobColorInput.value = job.color;
+            editJobStartDateInput.value = job.startDate;
+
+            // Popola il dropdown delle persone.
+            editJobPersonSelect.innerHTML = '';
+            people.forEach(p => {
+                const option = document.createElement('option');
+                option.value = p.name;
+                option.textContent = p.name;
+                if (p.name === job.person) {
+                    option.selected = true;
+                }
+                editJobPersonSelect.appendChild(option);
+            });
+
+            editScheduledJobModal.classList.remove('hidden'); // Mostra il modale.
+        }
+
+        /**
+         * Salva le modifiche a una commessa programmata in Firestore.
+         */
+        async function saveEditedJob() {
+            if (!selectedJobForEdit) return;
+
+            const updatedJobData = {
+                name: editJobNameInput.value,
+                duration: parseInt(editJobDurationInput.value),
+                color: editJobColorInput.value,
+                person: editJobPersonSelect.value,
+                startDate: editJobStartDateInput.value
+            };
+
+            try {
+                const jobRef = doc(scheduleCollection, selectedJobForEdit.id);
+                await updateDoc(jobRef, updatedJobData);
+                console.log("Commesse aggiornata con successo!");
+                editScheduledJobModal.classList.add('hidden'); // Nascondi il modale.
+            } catch (error) {
+                console.error("Errore durante l'aggiornamento della commessa:", error);
+            }
+        }
+
+        /**
+         * Elimina una commessa programmata da Firestore dopo la conferma.
+         * @param {string} jobId - L'ID della commessa da eliminare.
+         */
+        async function deleteScheduledJob() {
+            if (!selectedJobForEdit || !selectedJobForEdit.id) return;
+
+            // Opzionale: Aggiungi un modale di conferma per l'eliminazione
+            if (!confirm(`Sei sicuro di voler eliminare la commessa "${selectedJobForEdit.name}"?`)) {
+                return;
+            }
+
+            try {
+                await deleteDoc(doc(scheduleCollection, selectedJobForEdit.id));
+                console.log("Commesse eliminata con successo!");
+                editScheduledJobModal.classList.add('hidden'); // Nascondi il modale.
+                selectedJobForEdit = null; // Resetta la commessa selezionata.
+            } catch (error) {
+                console.error("Errore durante l'eliminazione della commessa:", error);
+            }
+        }
+
+        // --- NUOVA FUNZIONALITÀ: Funzioni per la gestione degli operatori ---
+        /**
+         * Esegue il rendering dell'elenco degli operatori nel modale di gestione.
+         * @param {Array<Object>} peopleData - Un array di oggetti persona da Firestore.
+         */
+        function renderPeopleList(peopleData) {
+            peopleListContainer.innerHTML = '';
+            peopleData.forEach(person => {
+                const div = document.createElement('div');
+                div.className = 'flex justify-between items-center p-2 border-b last:border-b-0';
+                div.innerHTML = `
+                    <span class="text-gray-700">${person.name}</span>
+                    <button class="delete-person-btn text-red-500 hover:text-red-700 font-semibold text-sm" data-id="${person.id}">Elimina</button>
+                `;
+                peopleListContainer.appendChild(div);
+            });
+
+            // Collega i listener ai nuovi pulsanti di eliminazione.
+            document.querySelectorAll('.delete-person-btn').forEach(button => {
+                button.addEventListener('click', (e) => deletePerson(e.target.dataset.id));
+            });
+        }
+
+        /**
+         * Aggiunge un nuovo operatore alla collezione `people` in Firestore.
+         */
+        async function addPerson() {
+            const name = newPersonNameInput.value.trim();
+            if (name) {
+                try {
+                    await addDoc(peopleCollection, { name });
+                    newPersonNameInput.value = ''; // Pulisci l'input.
+                    console.log("Operatore aggiunto con successo!");
+                } catch (error) {
+                    console.error("Errore durante l'aggiunta dell'operatore:", error);
+                }
+            }
+        }
+
+        /**
+         * Elimina un operatore e tutte le commesse a lui assegnate da Firestore.
+         * @param {string} personId - L'ID dell'operatore da eliminare.
+         */
+        async function deletePerson(personId) {
+            const personToDelete = people.find(p => p.id === personId);
+            if (!personToDelete) return;
+
+            if (!confirm(`Sei sicuro di voler eliminare l'operatore "${personToDelete.name}"? Tutte le sue commesse programmate verranno eliminate.`)) {
+                return;
+            }
+
+            const batch = writeBatch(db);
+            
+            try {
+                // Elimina l'operatore dalla collezione delle persone.
+                batch.delete(doc(peopleCollection, personId));
+
+                // Elimina tutte le commesse programmate assegnate a questo operatore.
+                const q = query(scheduleCollection, (doc) => doc.data().person === personToDelete.name);
+                const scheduledJobsSnapshot = await getDocs(q);
+                scheduledJobsSnapshot.forEach((jobDoc) => {
+                    batch.delete(doc(scheduleCollection, jobDoc.id));
+                });
+
+                await batch.commit();
+                console.log("Operatore e commesse associate eliminate con successo!");
+            } catch (error) {
+                console.error("Errore durante l'eliminazione dell'operatore o delle commesse:", error);
+            }
+        }
+
+
+        /**
+         * Inizializza tutti i listener di eventi non relativi alle celle del calendario (ad esempio, pulsanti di navigazione, pulsanti modali).
+         */
+        function initEventListeners() {
+            // Pulsanti di navigazione del calendario.
+            prevWeekBtn.addEventListener('click', () => {
+                currentDate = addDays(currentDate, -7); // Torna indietro di 7 giorni.
+                renderCalendar();
+            });
+            nextWeekBtn.addEventListener('click', () => {
+                currentDate = addDays(currentDate, 7); // Vai avanti di 7 giorni.
+                renderCalendar();
+            });
+            // Pulsante "Oggi" per resettare la vista alla settimana corrente.
+            todayBtn.addEventListener('click', () => {
+                currentDate = new Date();
+                currentDate.setHours(0,0,0,0); // Resetta i componenti orari.
+                renderCalendar();
+            });
+
+            // Elementi del modale Aggiungi Tipo Commessa.
+            const addJobModal = document.getElementById('add-job-modal');
+            const showAddJobModalBtn = document.getElementById('show-add-job-modal');
+            const cancelAddJobBtn = document.getElementById('cancel-add-job');
+            const addJobForm = document.getElementById('add-job-form');
+            
+            // Listener di eventi per nascondere il modale di conferma divisione.
+            document.getElementById('cancel-split').addEventListener('click', () => document.getElementById('split-confirm-modal').classList.add('hidden'));
+
+            // Mostra e nascondi il modale Aggiungi Tipo Commessa.
+            showAddJobModalBtn.addEventListener('click', () => addJobModal.classList.remove('hidden'));
+            cancelAddJobBtn.addEventListener('click', () => addJobModal.classList.add('hidden'));
+
+            // Gestisci l'invio del modulo per l'aggiunta di nuovi tipi di commessa.
+            addJobForm.addEventListener('submit', async (e) => {
+                e.preventDefault(); // Impedisce l'invio predefinito del modulo.
+                const name = document.getElementById('job-name').value;
+                const duration = parseInt(document.getElementById('job-duration').value);
+                const color = document.getElementById('job-color').value;
+
+                if(name && duration > 0) {
+                    await addDoc(jobsCollection, { name, duration, color }); // Aggiungi il nuovo modello di commessa a Firestore.
+                    addJobForm.reset(); // Pulisci i campi del modulo.
+                    addJobModal.classList.add('hidden'); // Nascondi il modale.
+                }
+            });
+
+            // NUOVA FUNZIONALITÀ: Listener per il modale di modifica/eliminazione della commessa programmata
+            editScheduledJobForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                await saveEditedJob();
+            });
+            cancelEditScheduledJobBtn.addEventListener('click', () => {
+                editScheduledJobModal.classList.add('hidden');
+                selectedJobForEdit = null;
+            });
+            deleteScheduledJobBtn.addEventListener('click', deleteScheduledJob);
+
+
+            // NUOVA FUNZIONALITÀ: Listener per il modale di gestione degli operatori
+            showManagePeopleModalBtn.addEventListener('click', () => managePeopleModal.classList.remove('hidden'));
+            closeManagePeopleModalBtn.addEventListener('click', () => managePeopleModal.classList.add('hidden'));
+            addPersonBtn.addEventListener('click', addPerson);
+            newPersonNameInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault(); // Previeni l'invio del modulo
+                    addPerson();
+                }
+            });
+        }
+        
+        /**
+         * Collega i listener in tempo reale alle collezioni Firestore (`jobs`, `schedule`, `people`).
+         * Aggiorna l'interfaccia utente ogni volta che i dati cambiano nel database.
+         */
+        function attachFirestoreListeners() {
+            // Ascolta le modifiche nei modelli di commessa (commesse non programmate).
+            onSnapshot(query(jobsCollection), (snapshot) => {
+                // Mappa i documenti Firestore a un array più pulito di oggetti commessa.
+                const jobs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                renderUnscheduledJobs(jobs); // Rirendi la sidebar delle commesse non programmate.
+            });
+
+            // Ascolta le modifiche negli eventi programmati.
+            onSnapshot(query(scheduleCollection), (snapshot) => {
+                schedule = {}; // Cancella la programmazione corrente per ricostruirla.
+                snapshot.docs.forEach(doc => {
+                    const event = { id: doc.id, ...doc.data() };
+                    // Popola l'oggetto `schedule` per una rapida rilevazione delle collisioni e rendering.
+                    // Un singolo evento programmato può occupare più giorni, quindi viene aggiunto per ogni giorno.
+                    if (event.duration > 0 && event.startDate && event.person) {
+                        for(let i=0; i < event.duration; i++) {
+                            const date = formatDate(addDays(new Date(event.startDate), i));
+                            const key = `${event.person}-${date}`;
+                            schedule[key] = event; // Memorizza l'intero oggetto evento.
+                        }
+                    }
+                });
+                renderScheduledJobs(); // Rirendi le commesse programmate sul calendario.
+            });
+
+            // NUOVA FUNZIONALITÀ: Ascolta le modifiche nell'elenco degli operatori.
+            onSnapshot(query(peopleCollection), (snapshot) => {
+                people = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                renderPeopleList(people); // Aggiorna la lista degli operatori nel modale di gestione.
+                renderCalendar(); // Rirendi il calendario in quanto l'elenco delle persone è cambiato.
+            });
+        }
+        
+        // --- Autenticazione e Avvio dell'Applicazione ---
+        // Ascolta le modifiche dello stato di autenticazione di Firebase.
+        onAuthStateChanged(auth, (user) => {
+            if (user) {
+                currentUser = user;
+                // Visualizza l'ID utente completo.
+                document.getElementById('user-id-display').textContent = user.uid;
+                // Renderizza il calendario e attacca i listener solo dopo l'autenticazione.
+                // initEventListeners() e attachFirestoreListeners() sono ora chiamati qui.
+                initEventListeners(); 
+                attachFirestoreListeners();
+            }
+        });
+        
+        // IIFE asincrona (Immediately Invoked Function Expression) per l'autenticazione iniziale.
+        (async () => {
+            try {
+                // Tenta di accedere con un token personalizzato se fornito (dall'ambiente Canvas).
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    // Fallback all'accesso anonimo se nessun token personalizzato è disponibile.
+                    await signInAnonymously(auth);
+                }
+            } catch (error) {
+                console.error("Autenticazione fallita:", error); // Registra eventuali errori di autenticazione.
+            }
+        })();
+
+        /**
+         * Aggiunge i listener di eventi drag-and-drop a tutte le celle del calendario.
+         * Ciò consente di rilasciare gli elementi di lavoro sul calendario.
+         */
+        function addDragAndDropListenersToCells() {
+            document.querySelectorAll('.calendar-cell').forEach(cell => {
+                // Impedisci il comportamento predefinito per consentire il rilascio. Cambia lo sfondo al passaggio del mouse.
+                cell.addEventListener('dragover', e => { e.preventDefault(); e.target.closest('.calendar-cell').style.backgroundColor = 'rgba(79, 70, 229, 0.1)'; });
+                // Resetta lo sfondo quando si trascina fuori dalla cella.
+                cell.addEventListener('dragleave', e => { e.target.closest('.calendar-cell').style.backgroundColor = ''; });
+                // Gestisci l'evento di rilascio effettivo.
+                cell.addEventListener('drop', handleDrop);
+            });
+        }
+    </script>
+</body>
+</html>
